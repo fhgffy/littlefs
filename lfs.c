@@ -3761,7 +3761,7 @@ static lfs_soff_t lfs_file_seek_(lfs_t *lfs, lfs_file_t *file,
 static int lfs_file_truncate_(lfs_t *lfs, lfs_file_t *file, lfs_off_t size) {
     LFS_ASSERT((file->flags & LFS_O_WRONLY) == LFS_O_WRONLY);
 
-    if (size > LFS_FILE_MAX) {
+    if (size > lfs->file_max) {
         return LFS_ERR_INVAL;
     }
 

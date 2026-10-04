@@ -501,3 +501,71 @@ code = '''
     lfs_file_close(&lfs, &file) => 0;
     lfs_unmount(&lfs) => 0;
 '''
+
+# Reject sizes beyond the mounted filesystem's limit before changing the file.
+[cases.test_truncate_filemax]
+defines.LIMIT = [8, 64, 513]
+defines.FROM_DISK = [false, true]
+defines.DIRTY = [false, true]
+code = '''
+    struct lfs_config limited_cfg = *cfg;
+    limited_cfg.file_max = LIMIT;
+    lfs_t lfs;
+    lfs_format(&lfs, &limited_cfg) => 0;
+
+    struct lfs_config mount_cfg = limited_cfg;
+    if (FROM_DISK) {
+        mount_cfg.file_max = 0;
+    }
+    lfs_mount(&lfs, &mount_cfg) => 0;
+    lfs_file_t file;
+    lfs_file_open(&lfs, &file, "limited",
+            LFS_O_RDWR | LFS_O_CREAT) => 0;
+    lfs_file_write(&lfs, &file, "data", 4) => 4;
+    if (!DIRTY) {
+        lfs_file_sync(&lfs, &file) => 0;
+    }
+
+    lfs_emubd_io_t proged = lfs_emubd_proged(cfg);
+    lfs_emubd_io_t erased = lfs_emubd_erased(cfg);
+    const lfs_off_t invalid_sizes[] = {LIMIT+1, LFS_FILE_MAX, (lfs_off_t)-1};
+    for (unsigned i = 0; i < sizeof(invalid_sizes)/sizeof(invalid_sizes[0]); i++) {
+        lfs_file_truncate(&lfs, &file, invalid_sizes[i]) => LFS_ERR_INVAL;
+        lfs_file_size(&lfs, &file) => 4;
+        lfs_file_tell(&lfs, &file) => 4;
+        lfs_emubd_proged(cfg) => proged;
+        lfs_emubd_erased(cfg) => erased;
+    }
+
+    // The exact limit is valid and must preserve the position and old data.
+    lfs_file_truncate(&lfs, &file, LIMIT) => 0;
+    lfs_file_size(&lfs, &file) => LIMIT;
+    lfs_file_tell(&lfs, &file) => 4;
+    lfs_file_rewind(&lfs, &file) => 0;
+    uint8_t buffer[LIMIT];
+    lfs_file_read(&lfs, &file, buffer, LIMIT) => LIMIT;
+    memcmp(buffer, "data", 4) => 0;
+    for (lfs_size_t i = 4; i < LIMIT; i++) {
+        buffer[i] => 0;
+    }
+    lfs_file_close(&lfs, &file) => 0;
+    lfs_unmount(&lfs) => 0;
+
+    // The permitted growth must survive remount, with no rejected suffix.
+    lfs_mount(&lfs, &mount_cfg) => 0;
+    lfs_file_open(&lfs, &file, "limited", LFS_O_RDWR) => 0;
+    lfs_file_size(&lfs, &file) => LIMIT;
+    lfs_file_read(&lfs, &file, buffer, LIMIT) => LIMIT;
+    memcmp(buffer, "data", 4) => 0;
+    for (lfs_size_t i = 4; i < LIMIT; i++) {
+        buffer[i] => 0;
+    }
+    lfs_file_truncate(&lfs, &file, LIMIT-1) => 0;
+    lfs_file_size(&lfs, &file) => LIMIT-1;
+    lfs_file_tell(&lfs, &file) => LIMIT;
+    lfs_file_truncate(&lfs, &file, 0) => 0;
+    lfs_file_size(&lfs, &file) => 0;
+    lfs_file_tell(&lfs, &file) => LIMIT;
+    lfs_file_close(&lfs, &file) => 0;
+    lfs_unmount(&lfs) => 0;
+'''
